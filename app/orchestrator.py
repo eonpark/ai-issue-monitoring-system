@@ -55,12 +55,7 @@ class IssueMonitoringOrchestrator:
         try:
             validated = self.validator.validate(issues)
             for issue in validated:
-                issue["validation_status"] = "OK"
-            invalid_urls = {item.get("url") for item in validated}
-            for issue in issues:
-                if issue.get("url") not in invalid_urls:
-                    issue["validation_status"] = "NO_OK"
-                    issue["validated"] = False
+                issue["validation_status"] = issue.get("status", "NO_OK")
             logger.info("Validator step finished: count=%s", len(validated))
             return validated
         except Exception as exc:  # pragma: no cover
@@ -147,9 +142,15 @@ class IssueMonitoringOrchestrator:
         else:
             logger.warning("Max steps reached: %s", self.max_steps)
 
-        summary = self._build_summary(state=state, actions=actions, publish_result=publish_result)
+        completed_at = datetime.now(timezone.utc).isoformat()
+        app_state.set_last_run_time(completed_at)
+        summary = self._build_summary(
+            state=state,
+            actions=actions,
+            publish_result=publish_result,
+            last_run_time=completed_at,
+        )
         app_state.update_result(summary)
-        app_state.set_last_run_time(datetime.now(timezone.utc).isoformat())
         logger.info(
             "LLM router pipeline finished: final_step=%s total=%s sent=%s",
             summary["final_step"],
@@ -166,6 +167,7 @@ class IssueMonitoringOrchestrator:
         state: dict[str, Any],
         actions: list[str],
         publish_result: dict[str, Any] | None,
+        last_run_time: str,
     ) -> dict[str, Any]:
         data = state.get("data")
         total = len(data) if isinstance(data, list) else 0
@@ -179,7 +181,7 @@ class IssueMonitoringOrchestrator:
             "message": state.get("message"),
             "data": data,
             "publish_result": publish_result,
-            "last_run_time": app_state.get_last_run_time(),
+            "last_run_time": last_run_time,
         }
 
 
