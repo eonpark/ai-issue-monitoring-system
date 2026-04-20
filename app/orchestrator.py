@@ -123,7 +123,7 @@ class IssueMonitoringOrchestrator:
             return {"status": "skipped", "detail": str(exc), "message": message}
 
     def run_pipeline(self) -> dict[str, Any]:
-        logger.info("LLM router pipeline started")
+        logger.info("Pipeline started")
         self._last_dedup_stats = {"before": 0, "after": 0, "duplicates": 0}
         self._last_collected_issues = []
         self._last_analyzed_issues = []
@@ -247,7 +247,7 @@ class IssueMonitoringOrchestrator:
         )
         app_state.update_result(summary)
         logger.info(
-            "LLM router pipeline finished: final_step=%s total=%s sent=%s",
+            "Pipeline finished: final_step=%s total=%s sent=%s",
             summary["final_step"],
             summary["total"],
             summary["sent"],

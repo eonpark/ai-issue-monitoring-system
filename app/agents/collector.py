@@ -4,19 +4,17 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
-import requests
 from dotenv import load_dotenv
+
+from app.skills.tavily_search import search_issues
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-TAVILY_API_URL = "https://api.tavily.com/search"
 SKILLS_MD_PATH = Path(__file__).resolve().parents[2] / "skills.md"
 DEFAULT_QUERY_GROUPS = {
     "domestic": {
@@ -57,14 +55,6 @@ DEFAULT_QUERY_GROUPS = {
 MAX_RESULTS_PER_QUERY = 5
 TIME_RANGE = "week"
 MAX_PER_REGION = 10
-DATE_PATTERNS = [
-    "%Y-%m-%d",
-    "%Y/%m/%d",
-    "%b %d, %Y",
-    "%B %d, %Y",
-    "%d %b %Y",
-    "%d %B %Y",
-]
 
 
 def collect_issues() -> list[dict[str, Any]]:
@@ -88,43 +78,16 @@ def collect_issues() -> list[dict[str, Any]]:
         region_issues: list[dict[str, Any]] = []
         for source_type, queries in region_groups.items():
             for query in queries:
-                payload = {
-                    "api_key": api_key,
-                    "query": query,
-                    "search_depth": "basic",
-                    "include_answer": False,
-                    "max_results": MAX_RESULTS_PER_QUERY,
-                    "time_range": TIME_RANGE,
-                }
-
-                try:
-                    response = requests.post(TAVILY_API_URL, json=payload, timeout=20)
-                    response.raise_for_status()
-                    response_json = response.json()
-                    results = response_json.get("results", [])
-                    success_count += 1
-                except Exception:  # pragma: no cover
-                    logger.exception(
-                        "Collector query failed: region=%s source_type=%s query=%s",
-                        region,
-                        source_type,
-                        query,
-                    )
-                    continue
-
-                logger.debug(
-                    "Collector query result: region=%s source_type=%s query=%s results=%s request_id=%s response_time=%s",
-                    region,
-                    source_type,
+                results = search_issues(
                     query,
-                    len(results),
-                    response_json.get("request_id"),
-                    response_json.get("response_time"),
+                    source_type=source_type,
+                    region=region,
+                    time_range=TIME_RANGE,
+                    max_results=MAX_RESULTS_PER_QUERY,
                 )
-
-                region_issues.extend(
-                    _normalize_results(results, source_type=source_type, region=region)
-                )
+                if results:
+                    success_count += 1
+                    region_issues.extend(results)
         issues_by_region[region] = _keep_minimum_viable_issues(_deduplicate_issues(region_issues))[:MAX_PER_REGION]
 
     balanced_issues = _balance_regions(
@@ -182,31 +145,6 @@ def _validate_query_groups(raw: Any) -> dict[str, dict[str, list[str]]]:
                 str(query).strip() for query in queries if str(query).strip()
             ]
     return validated
-
-
-def _normalize_results(results: list[dict[str, Any]], source_type: str, region: str) -> list[dict[str, Any]]:
-    normalized: list[dict[str, Any]] = []
-    for item in results:
-        url = item.get("url", "")
-        content = item.get("content", "")
-        published_at = _extract_published_date(
-            item.get("published_date", "") or item.get("published_at", ""),
-            content,
-        )
-        normalized.append(
-            {
-                "title": item.get("title", ""),
-                "content": content,
-                "url": url,
-                "source": _extract_domain(url),
-                "source_type": source_type,
-                "region": region,
-                "published_at": published_at,
-            }
-        )
-    return normalized
-
-
 def _deduplicate_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -252,60 +190,9 @@ def _balance_regions(
         if index < len(global_issues):
             balanced.append(global_issues[index])
     return balanced
-
-
-def _extract_published_date(raw_date: str, content: str) -> str:
-    candidate = str(raw_date).strip()
-    parsed = _parse_date(candidate)
-    if parsed:
-        return parsed
-
-    content_text = str(content)
-    regex_candidates = [
-        r"\b\d{4}-\d{2}-\d{2}\b",
-        r"\b\d{4}/\d{2}/\d{2}\b",
-        r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}, \d{4}\b",
-        r"\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{4}\b",
-    ]
-    for pattern in regex_candidates:
-        match = re.search(pattern, content_text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        parsed = _parse_date(match.group(0))
-        if parsed:
-            return parsed
-
-    return ""
-
-
-def _parse_date(value: str) -> str:
-    cleaned = value.strip()
-    if not cleaned:
-        return ""
-
-    cleaned = cleaned.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(cleaned).date().isoformat()
-    except ValueError:
-        pass
-
-    for pattern in DATE_PATTERNS:
-        try:
-            return datetime.strptime(cleaned, pattern).date().isoformat()
-        except ValueError:
-            continue
-    return ""
-
-
 class CollectorAgent:
     def collect(self, query: str | None = None) -> list[dict[str, Any]]:
         return collect_issues()
-
-
-def _extract_domain(url: str) -> str:
-    if not url:
-        return ""
-    return urlparse(url).netloc
 
 
 if __name__ == "__main__":

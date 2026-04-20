@@ -9,7 +9,11 @@ from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
-from openai import OpenAI
+
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover
+    OpenAI = None
 
 load_dotenv()
 
@@ -289,6 +293,33 @@ def _llm_audit_issue(
     fetched_content: str,
     collected_content: str,
 ) -> dict[str, Any]:
+    if OpenAI is None:
+        parsed = {}
+        source_verified = bool(parsed.get("source_verified", False))
+        content_match = bool(parsed.get("content_match", False))
+        audit_reason = str(parsed.get("audit_reason", "")).strip().lower()
+        if not audit_reason:
+            keyword_hits = _count_keyword_hits(title=title, summary=summary, source_text=fetched_content)
+            content_match = keyword_hits >= 3
+            source_verified = content_match
+            audit_reason = "matched_source_content" if content_match else "content_mismatch"
+        normalized_reason_map = {
+            "homepage_or_listing_page": "generic_or_empty_source",
+            "generic_page": "generic_or_empty_source",
+            "hub_page": "generic_or_empty_source",
+            "landing_page": "generic_or_empty_source",
+            "listing_page": "generic_or_empty_source",
+            "content_mismatch": "content_mismatch",
+            "matched_source_content": "matched_source_content",
+            "relevant_source_content": "matched_source_content",
+        }
+        return {
+            "published_at": "",
+            "source_verified": source_verified,
+            "content_match": content_match,
+            "audit_reason": normalized_reason_map.get(audit_reason, audit_reason or "content_mismatch"),
+        }
+
     try:
         client = OpenAI()
         response = client.chat.completions.create(
@@ -366,8 +397,8 @@ def _extract_publication_date(
     candidates = [
         fallback_published_at.strip(),
         _extract_date_from_html(fetched_html),
-        _extract_date_from_text(final_url),
-        _extract_date_from_text(fetched_content[:4000]),
+        _extract_date_from_contextual_text(fetched_content[:2500]),
+        _extract_date_from_url(final_url),
     ]
     for candidate in candidates:
         normalized = _normalize_date(candidate)
@@ -417,23 +448,35 @@ def _extract_date_from_html(html: str) -> str:
     return ""
 
 
-def _extract_date_from_text(text: str) -> str:
+def _extract_date_from_url(text: str) -> str:
     if not text:
         return ""
 
     patterns = [
-        r"\b20\d{2}-\d{2}-\d{2}\b",
-        r"\b20\d{2}/\d{2}/\d{2}\b",
-        r"\b20\d{2}\.\d{2}\.\d{2}\b",
-        r"\b20\d{2}\.\d{1,2}\.\d{1,2}\b",
-        r"\b20\d{2}-\d{1,2}-\d{1,2}\b",
-        r"\b20\d{2}/\d{1,2}/\d{1,2}\b",
-        r"\b20\d{2}년\s*\d{1,2}월\s*\d{1,2}일\b",
+        r"/(20\d{2}/\d{1,2}/\d{1,2})(?:/|$)",
+        r"/(20\d{2}-\d{1,2}-\d{1,2})(?:/|$)",
+        r"/(20\d{2}\.\d{1,2}\.\d{1,2})(?:/|$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            return match.group(0)
+            return match.group(1)
+    return ""
+
+
+def _extract_date_from_contextual_text(text: str) -> str:
+    if not text:
+        return ""
+
+    normalized_text = re.sub(r"\s+", " ", text).strip()
+    patterns = [
+        r"(?:기사입력|입력|등록|등록시간|송고|송고시간|업데이트|수정|수정시간)\s*[:：]?\s*((?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|20\d{2}년\s*\d{1,2}월\s*\d{1,2}일)(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)",
+        r"(?:Published|Updated|Posted on|Published on|Last updated)\s*[:：]?\s*((?:20\d{2}[./-]\d{1,2}[./-]\d{1,2}|20\d{2}년\s*\d{1,2}월\s*\d{1,2}일)(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, normalized_text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
     return ""
 
 

@@ -3,6 +3,9 @@
 이 문서는 FastAPI 기반 `실시간 이슈 수집 및 분석 시스템`에서 사용하는 Harness 스타일 Skill 명세다.  
 각 Skill은 독립 실행 단위이며, 특정 Agent가 명확한 입력을 전달하고 명확한 출력을 받는 방식으로 설계한다.
 
+현재 코드 기준으로 Skill은 외부 API/모델 호출과 저수준 표준화를 담당하고, Agent는 query 선택,
+입력 순회, fallback, 결과 조립 같은 비즈니스 규칙을 담당한다.
+
 - Collector -> Tavily Search
 - Analyzer -> LLM Analyze
 - Publisher -> Slack Send
@@ -44,6 +47,7 @@
 
 - 검색 질의를 사용해 외부 이슈 후보를 수집한다.
 - 결과를 표준 JSON 구조로 정규화한다.
+- 현재 구현에서 Tavily HTTP 호출과 검색 결과 정규화는 이 Skill이 직접 담당한다.
 - 주요 이슈 판단은 하지 않고, 후속 Analyzer가 해석할 수 있도록 원시 데이터와 최소 메타만 보존한다.
 - 국내(`domestic`)와 해외(`global`) query를 분리 수집한 뒤 균형 있게 합친다.
 - 쿼리는 `정책 / 시장 / 기술 / 기업 활동` 변화 탐지를 우선 목표로 설계한다.
@@ -180,6 +184,20 @@ payload = {
 }
 ```
 
+실제 Skill 함수 예시는 다음과 같다.
+
+```python
+from app.skills.tavily_search import search_issues
+
+issues = search_issues(
+    "AI regulation announcement",
+    source_type="event",
+    region="global",
+    time_range="week",
+    max_results=5,
+)
+```
+
 ---
 
 ## LLM Analyze
@@ -190,6 +208,7 @@ payload = {
 
 - 수집된 이슈 후보를 주요 이슈 정의 기준으로 해석한다.
 - 한국어 요약, 점수, 판단 이유, 최근성, 이슈 유형을 생성한다.
+- 현재 구현에서 OpenAI 호출과 출력 필드 정규화는 이 Skill이 직접 담당한다.
 - 영향 범위, 변화의 실체, 주요 이슈 여부를 구조화된 필드로 반환한다.
 - Collector가 평가하지 않은 내용적 타당성은 Analyzer가 직접 판단한다.
 - 제목 형식이 아니라 내용의 실질적 변화와 영향도를 기준으로 주요 이슈 여부를 판단한다.
@@ -314,6 +333,17 @@ from app.agents.analyzer import analyze_issues
 analyzed = analyze_issues(issues)
 ```
 
+실제 Skill 함수 예시는 다음과 같다.
+
+```python
+from app.skills.llm_analyze import analyze_issue
+
+result = analyze_issue(
+    issue,
+    judgment_reference=judgment_reference,
+)
+```
+
 ---
 
 ## Slack Send
@@ -381,9 +411,9 @@ publisher.publish({"text": "🔥 [AI Issue Report]\n\n1️⃣ 제목: ..."})
 
 ## Agent-Skill Mapping
 
-- `Collector -> Tavily Search` -> 원시 이슈 수집 및 메타 태깅
-- `Analyzer -> LLM Analyze` -> 주요 이슈 해석, 유형 분류, 점수화
-- `Publisher -> Slack Send` -> 최종 메시지 전송
+- `Collector Agent -> Tavily Search Skill` -> query 그룹별 외부 검색 실행, 결과 정규화
+- `Analyzer Agent -> LLM Analyze Skill` -> 단건 LLM 분석 호출, 출력 필드 정규화
+- `Publisher Agent -> Slack Send Skill` -> 최종 메시지 전송
 
 ---
 

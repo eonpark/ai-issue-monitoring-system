@@ -8,6 +8,16 @@
 - Skills: `app/skills/*.py`
 - Skill 명세 문서: [skills.md](/Users/eonseon/ai-issue-monitoring-system/skills.md:1)
 
+## Router 역할
+
+현재 Router는 LLM 자유 판단 레이어가 아니라, 파이프라인 순서 보장과 실패 복구를 담당하는
+`deterministic state router`로 동작한다.
+
+- 현재 상태(`step`, `failed_action`, `retry_count`)를 바탕으로 다음 action을 결정한다.
+- 실행 순서는 고정 상태 전이 규칙을 따른다.
+- 재시도 한도를 넘기면 단계별 fallback 규칙에 따라 이전 단계로 복귀하거나 종료한다.
+- 의미 판단은 Router가 아니라 Analyzer와 Validator의 LLM/규칙 로직이 담당한다.
+
 ## 주요 이슈 정의
 
 이 시스템에서 `주요 이슈`는 다음과 같이 정의한다.
@@ -41,6 +51,8 @@ Analyzer와 Validator는 주요 이슈를 아래 3개 유형으로 구분한다.
 
 - 외부 검색 API를 사용해 이슈 후보를 최대한 넓게 수집한다.
 - 현재 구현은 Tavily REST API를 호출한다.
+- Agent는 query 그룹 로딩, region balance, dedup, 최소 정규화를 담당한다.
+- 실제 외부 검색 호출과 검색 결과 표준화는 `app/skills/tavily_search.py`가 담당한다.
 - `skills.md`의 Collector query 설정 블록을 읽어 `domestic/global`과 `news/event/social` 구성을 반영한다.
 - 여러 query 카테고리(`news`, `event`, `social`)를 사용한다.
 - 국내와 해외 결과를 분리 수집한 뒤 균형 있게 merge 한다.
@@ -89,6 +101,8 @@ Analyzer와 Validator는 주요 이슈를 아래 3개 유형으로 구분한다.
 **Role**
 
 - 수집된 이슈를 LLM으로 요약하고 중요도를 평가한다.
+- Agent는 입력 순회, judgment reference 로딩, fallback 처리, 결과 조립을 담당한다.
+- 실제 LLM 호출과 출력 필드 정규화는 `app/skills/llm_analyze.py`가 담당한다.
 - 주요 이슈 정의를 기준으로 `event`, `trend`, `signal`을 판정한다.
 - Collector가 넘긴 원시 데이터만 바탕으로 주요 이슈 여부를 해석한다.
 - 영향 범위, 변화의 실체, 시의성을 구조적으로 판단한다.
@@ -267,11 +281,11 @@ Analyzer와 Validator는 주요 이슈를 아래 3개 유형으로 구분한다.
 
 ## Skill 연결
 
-- Collector -> `app/skills/tavily_search.py` -> [skills.md / Tavily Search](</Users/eonseon/ai-issue-monitoring-system/skills.md#tavily-search>)
-- Analyzer -> `app/skills/llm_analyze.py` -> [skills.md / LLM Analyze](</Users/eonseon/ai-issue-monitoring-system/skills.md#llm-analyze>)
+- Collector Agent -> `app/skills/tavily_search.py` -> [skills.md / Tavily Search](</Users/eonseon/ai-issue-monitoring-system/skills.md#tavily-search>)
+- Analyzer Agent -> `app/skills/llm_analyze.py` -> [skills.md / LLM Analyze](</Users/eonseon/ai-issue-monitoring-system/skills.md#llm-analyze>)
 - Validator -> 내부 판단 로직
 - Formatter -> 내부 메시지 포맷팅 로직
-- Publisher -> `app/skills/slack_send.py` -> [skills.md / Slack Send](</Users/eonseon/ai-issue-monitoring-system/skills.md#slack-send>)
+- Publisher Agent -> `app/skills/slack_send.py` -> [skills.md / Slack Send](</Users/eonseon/ai-issue-monitoring-system/skills.md#slack-send>)
 
 ## 주요 이슈 판정 규칙
 
@@ -301,6 +315,8 @@ Analyzer와 Validator는 주요 이슈를 아래 3개 유형으로 구분한다.
 7. Publisher.publish(message)
 8. 결과 저장 및 상태 갱신
 ```
+
+Router는 위 순서를 임의로 바꾸지 않는다. 현재 구현은 상태머신 기반으로 다음 단계만 결정한다.
 
 ## 수집/분석 수량 정책
 

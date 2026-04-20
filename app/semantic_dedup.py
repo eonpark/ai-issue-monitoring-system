@@ -5,7 +5,11 @@ import math
 from typing import Any
 
 from dotenv import load_dotenv
-from openai import OpenAI
+
+try:
+    from openai import OpenAI
+except ImportError:  # pragma: no cover
+    OpenAI = None
 
 from app.db import get_recent_issues
 
@@ -25,6 +29,11 @@ def deduplicate_with_db(issues: list[dict[str, Any]]) -> tuple[list[dict[str, An
         logger.info("DB Semantic Dedup: before=%s after=%s duplicates=%s", 0, 0, 0)
         return [], stats
 
+    if OpenAI is None:
+        logger.warning("DB Semantic Dedup skipped: openai package is unavailable")
+        stats = {"before": len(issues), "after": len(issues), "duplicates": 0}
+        return issues, stats
+
     try:
         client = OpenAI()
     except Exception as exc:  # pragma: no cover
@@ -40,20 +49,30 @@ def deduplicate_with_db(issues: list[dict[str, Any]]) -> tuple[list[dict[str, An
         return issues, stats
 
     embedding_cache: dict[str, list[float]] = {}
+    recent_urls = _prepare_recent_url_set(recent_issues)
     recent_vectors = _prepare_recent_vectors(client, recent_issues, embedding_cache)
 
     deduped: list[dict[str, Any]] = []
     duplicate_count = 0
 
     for issue in issues:
+        normalized_url = _normalized_url(issue.get("url"))
+        if normalized_url and normalized_url in recent_urls:
+            duplicate_count += 1
+            continue
+
         summary = _summary_text(issue)
         if not summary:
             deduped.append(issue)
+            if normalized_url:
+                recent_urls.add(normalized_url)
             continue
 
         new_embedding = _get_embedding(client, summary, embedding_cache)
         if not new_embedding:
             deduped.append(issue)
+            if normalized_url:
+                recent_urls.add(normalized_url)
             continue
 
         is_duplicate = False
@@ -69,6 +88,8 @@ def deduplicate_with_db(issues: list[dict[str, Any]]) -> tuple[list[dict[str, An
 
         deduped_issue = {**issue, "embedding": new_embedding}
         deduped.append(deduped_issue)
+        if normalized_url:
+            recent_urls.add(normalized_url)
         recent_vectors.append({"embedding": new_embedding})
 
     logger.info(
@@ -78,6 +99,15 @@ def deduplicate_with_db(issues: list[dict[str, Any]]) -> tuple[list[dict[str, An
         duplicate_count,
     )
     return deduped, {"before": len(issues), "after": len(deduped), "duplicates": duplicate_count}
+
+
+def _prepare_recent_url_set(recent_issues: list[dict[str, Any]]) -> set[str]:
+    urls: set[str] = set()
+    for issue in recent_issues:
+        normalized_url = _normalized_url(issue.get("url"))
+        if normalized_url:
+            urls.add(normalized_url)
+    return urls
 
 
 def _prepare_recent_vectors(
@@ -120,6 +150,10 @@ def _get_embedding(
 
 def _summary_text(issue: dict[str, Any]) -> str:
     return str(issue.get("summary", "")).strip()
+
+
+def _normalized_url(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
