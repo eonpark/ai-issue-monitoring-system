@@ -23,12 +23,32 @@ ALLOWED_ACTIONS = [
     "publisher",
     "end",
 ]
+DEFAULT_TRANSITIONS = {
+    "start": "collector",
+    "collector_done": "analyzer",
+    "analyzer_done": "validator",
+    "validator_done": "formatter",
+    "formatter_done": "publisher",
+    "publisher_done": "end",
+}
+FAILURE_FALLBACKS = {
+    "collector": "end",
+    "analyzer": "collector",
+    "validator": "analyzer",
+    "formatter": "validator",
+    "publisher": "formatter",
+}
 
 
 def decide_next_action(state: dict[str, Any] | Any) -> dict[str, str]:
     """Decide the next pipeline action from agents/skills docs and current state."""
 
     normalized_state = _normalize_state(state)
+    if _should_use_local_transition(normalized_state):
+        action = _fallback_action(normalized_state)
+        logger.info("Router local transition action=%s", action)
+        return {"action": action}
+
     agents_md = _read_text_file(Path("agents.md"))
     skills_md = _read_text_file(Path("skills.md"))
 
@@ -61,6 +81,12 @@ def decide_next_action(state: dict[str, Any] | Any) -> dict[str, str]:
         action = _extract_action(response_json, normalized_state)
         logger.info("Router decided action=%s", action)
         return {"action": action}
+    except requests.HTTPError as exc:  # pragma: no cover
+        if exc.response is not None and exc.response.status_code == 429:
+            logger.warning("Router rate-limited, using fallback")
+        else:
+            logger.exception("Router failed, using fallback: %s", exc)
+        return {"action": _fallback_action(normalized_state)}
     except Exception as exc:  # pragma: no cover
         logger.exception("Router failed, using fallback: %s", exc)
         return {"action": _fallback_action(normalized_state)}
@@ -72,19 +98,14 @@ def _build_openai_payload(
     state: dict[str, Any],
 ) -> dict[str, Any]:
     transition_rules = {
-        "start": "collector",
-        "collector_done": "analyzer",
-        "analyzer_done": "validator",
-        "validator_done": "formatter",
-        "formatter_done": "publisher",
-        "publisher_done": "end",
+        **DEFAULT_TRANSITIONS,
     }
     current_step = state.get("step", "start")
     expected_action = transition_rules.get(current_step, _fallback_action(state))
 
     instructions = (
         "You are a strict router for an LLM-based agent system. "
-        "You must decide the next action only from the current step transition rules. "
+        "You must decide the next action from the current step transition rules and failure recovery rules. "
         "Allowed actions are exactly: collector, analyzer, validator, formatter, publisher, end. "
         "You must return JSON only. "
         "Do not include explanations, markdown, prose, code fences, or extra keys. "
@@ -100,6 +121,13 @@ def _build_openai_payload(
         '- validator_done -> formatter\n'
         '- formatter_done -> publisher\n'
         '- publisher_done -> end\n\n'
+        "Failure recovery rules:\n"
+        "- If the last action failed and retry_count is still below max_retries for that action, retry the same action.\n"
+        "- If collector keeps failing after retries, choose end.\n"
+        "- If analyzer keeps failing after retries, go back to collector.\n"
+        "- If validator keeps failing after retries, go back to analyzer.\n"
+        "- If formatter keeps failing after retries, go back to validator.\n"
+        "- If publisher keeps failing after retries, go back to formatter.\n\n"
         f"Current step: {current_step}\n"
         f"Expected next action from the rules: {expected_action}\n\n"
         f"Allowed actions: {ALLOWED_ACTIONS}\n\n"
@@ -167,19 +195,17 @@ def _extract_action(response_json: dict[str, Any], state: dict[str, Any]) -> str
 
 
 def _fallback_action(state: dict[str, Any]) -> str:
+    failed_action = state.get("failed_action")
+    if failed_action in ALLOWED_ACTIONS:
+        attempts = state.get("retry_count", {}).get(failed_action, 0)
+        max_retries = state.get("max_retries", {}).get(failed_action, 0)
+        if attempts < max_retries:
+            return failed_action
+        return FAILURE_FALLBACKS.get(failed_action, "end")
+
     step = state.get("step")
-    if step == "start":
-        return "collector"
-    if step == "collector_done":
-        return "analyzer"
-    if step == "analyzer_done":
-        return "validator"
-    if step == "validator_done":
-        return "formatter"
-    if step == "formatter_done":
-        return "publisher"
-    if step == "publisher_done":
-        return "end"
+    if step in DEFAULT_TRANSITIONS:
+        return DEFAULT_TRANSITIONS[step]
 
     if not state.get("issues"):
         return "collector"
@@ -195,18 +221,14 @@ def _fallback_action(state: dict[str, Any]) -> str:
 
 
 def _is_valid_for_step(state: dict[str, Any], action: str) -> bool:
-    expected = {
-        "start": "collector",
-        "collector_done": "analyzer",
-        "analyzer_done": "validator",
-        "validator_done": "formatter",
-        "formatter_done": "publisher",
-        "publisher_done": "end",
-    }
-    current_step = state.get("step")
-    if current_step in expected:
-        return expected[current_step] == action
     return action == _fallback_action(state)
+
+
+def _should_use_local_transition(state: dict[str, Any]) -> bool:
+    failed_action = state.get("failed_action")
+    if failed_action in ALLOWED_ACTIONS:
+        return True
+    return state.get("step") in DEFAULT_TRANSITIONS
 
 
 def _normalize_state(state: dict[str, Any] | Any) -> dict[str, Any]:

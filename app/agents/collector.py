@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -15,29 +17,46 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 TAVILY_API_URL = "https://api.tavily.com/search"
-QUERY_GROUPS = {
-    "news": [
-        "South Korea breaking politics economy technology",
-        "global breaking economy technology geopolitics",
-        "Asia major issues economy security",
-    ],
-    "event": [
-        "AI regulation announcement",
-        "startup funding news",
-        "company acquisition news",
-        "policy change news",
-    ],
-    "social": [
-        "site:twitter.com AI trend",
-        "site:reddit.com tech discussion",
-        "site:news.ycombinator.com startup",
-    ],
+SKILLS_MD_PATH = Path(__file__).resolve().parents[2] / "skills.md"
+DEFAULT_QUERY_GROUPS = {
+    "domestic": {
+        "news": [
+            "한국 주요 이슈 정책 경제 기술 산업",
+            "국내 정책 변화 시장 기술 기업",
+            "site:yna.co.kr OR site:hankyung.com OR site:mk.co.kr OR site:sedaily.com 한국 정책 경제 기술 기업",
+        ],
+        "event": [
+            "국내 규제 발표 기술 정책",
+            "한국 스타트업 투자 유치 인수합병",
+            "국내 기업 실적 투자 공급망 발표",
+        ],
+        "social": [
+            "site:news.ycombinator.com Korea startup policy",
+            "site:reddit.com Korea economy technology policy",
+        ],
+    },
+    "global": {
+        "news": [
+            "global major issues policy market technology companies",
+            "world economy technology regulation supply chain",
+            "site:reuters.com OR site:bloomberg.com OR site:ft.com OR site:wsj.com global policy market technology",
+        ],
+        "event": [
+            "AI regulation announcement",
+            "startup funding acquisition announcement",
+            "policy change market guidance",
+            "company earnings supply chain announcement",
+        ],
+        "social": [
+            "site:twitter.com policy market technology signal",
+            "site:reddit.com tech policy discussion",
+            "site:news.ycombinator.com startup market regulation",
+        ],
+    },
 }
-EXCLUDED_URL_KEYWORDS = ["/news", "/category", "/search", "/tag"]
-EXCLUDED_TITLE_KEYWORDS = ["top", "list", "trending", "모음"]
-MIN_CONTENT_LENGTH = 100
 MAX_RESULTS_PER_QUERY = 5
 TIME_RANGE = "week"
+MAX_PER_REGION = 10
 DATE_PATTERNS = [
     "%Y-%m-%d",
     "%Y/%m/%d",
@@ -52,62 +71,120 @@ def collect_issues() -> list[dict[str, Any]]:
     """Collect issues from Tavily REST API and normalize the results."""
 
     api_key = os.getenv("TAVILY_API_KEY", "").strip()
-    total_queries = sum(len(queries) for queries in QUERY_GROUPS.values())
+    query_groups = _load_query_groups_from_skills()
+    total_queries = sum(
+        len(queries)
+        for region_groups in query_groups.values()
+        for queries in region_groups.values()
+    )
     if not api_key:
         logger.info("Collector: queries=%s success=%s collected=%s", total_queries, 0, 0)
         return []
 
-    issues: list[dict[str, Any]] = []
+    issues_by_region: dict[str, list[dict[str, Any]]] = {"domestic": [], "global": []}
     success_count = 0
 
-    for source_type, queries in QUERY_GROUPS.items():
-        for query in queries:
-            payload = {
-                "api_key": api_key,
-                "query": query,
-                "search_depth": "basic",
-                "include_answer": False,
-                "max_results": MAX_RESULTS_PER_QUERY,
-                "time_range": TIME_RANGE,
-            }
+    for region, region_groups in query_groups.items():
+        region_issues: list[dict[str, Any]] = []
+        for source_type, queries in region_groups.items():
+            for query in queries:
+                payload = {
+                    "api_key": api_key,
+                    "query": query,
+                    "search_depth": "basic",
+                    "include_answer": False,
+                    "max_results": MAX_RESULTS_PER_QUERY,
+                    "time_range": TIME_RANGE,
+                }
 
-            try:
-                response = requests.post(TAVILY_API_URL, json=payload, timeout=20)
-                response.raise_for_status()
-                response_json = response.json()
-                results = response_json.get("results", [])
-                success_count += 1
-            except Exception:  # pragma: no cover
-                logger.exception("Collector query failed: source_type=%s query=%s", source_type, query)
-                continue
+                try:
+                    response = requests.post(TAVILY_API_URL, json=payload, timeout=20)
+                    response.raise_for_status()
+                    response_json = response.json()
+                    results = response_json.get("results", [])
+                    success_count += 1
+                except Exception:  # pragma: no cover
+                    logger.exception(
+                        "Collector query failed: region=%s source_type=%s query=%s",
+                        region,
+                        source_type,
+                        query,
+                    )
+                    continue
 
-            logger.debug(
-                "Collector query result: source_type=%s query=%s results=%s request_id=%s response_time=%s",
-                source_type,
-                query,
-                len(results),
-                response_json.get("request_id"),
-                response_json.get("response_time"),
-            )
+                logger.debug(
+                    "Collector query result: region=%s source_type=%s query=%s results=%s request_id=%s response_time=%s",
+                    region,
+                    source_type,
+                    query,
+                    len(results),
+                    response_json.get("request_id"),
+                    response_json.get("response_time"),
+                )
 
-            issues.extend(_normalize_results(results, source_type=source_type))
+                region_issues.extend(
+                    _normalize_results(results, source_type=source_type, region=region)
+                )
+        issues_by_region[region] = _keep_minimum_viable_issues(_deduplicate_issues(region_issues))[:MAX_PER_REGION]
 
-    deduped_issues = _deduplicate_issues(issues)
-    fresh_issues = _filter_fresh_issues(deduped_issues)
-    logger.info("Fresh filter: before=%s after=%s", len(deduped_issues), len(fresh_issues))
-    filtered_issues = _filter_article_issues(fresh_issues)
-    logger.info("Collector filtered: before=%s after=%s", len(fresh_issues), len(filtered_issues))
+    balanced_issues = _balance_regions(
+        domestic_issues=issues_by_region["domestic"],
+        global_issues=issues_by_region["global"],
+    )
+    normalized_issues = _keep_minimum_viable_issues(_deduplicate_issues(balanced_issues))
+    logger.info(
+        "Collector normalized: domestic=%s global=%s balanced=%s",
+        len(issues_by_region["domestic"]),
+        len(issues_by_region["global"]),
+        len(normalized_issues),
+    )
     logger.info(
         "Collector: queries=%s success=%s collected=%s",
         total_queries,
         success_count,
-        len(filtered_issues),
+        len(normalized_issues),
     )
-    logger.debug("Collector normalized issues: %s", filtered_issues)
-    return filtered_issues
+    logger.debug("Collector normalized issues: %s", normalized_issues)
+    return normalized_issues
 
 
-def _normalize_results(results: list[dict[str, Any]], source_type: str) -> list[dict[str, Any]]:
+def _load_query_groups_from_skills() -> dict[str, dict[str, list[str]]]:
+    try:
+        content = SKILLS_MD_PATH.read_text(encoding="utf-8")
+        match = re.search(
+            r"<!-- collector_query_config:start -->\s*```json\s*(\{.*?\})\s*```\s*<!-- collector_query_config:end -->",
+            content,
+            flags=re.DOTALL,
+        )
+        if not match:
+            logger.info("Collector query config: source=default")
+            return DEFAULT_QUERY_GROUPS
+
+        parsed = json.loads(match.group(1))
+        validated = _validate_query_groups(parsed)
+        logger.info("Collector query config: source=skills.md")
+        return validated
+    except Exception:
+        logger.exception("Collector query config load failed, using default")
+        return DEFAULT_QUERY_GROUPS
+
+
+def _validate_query_groups(raw: Any) -> dict[str, dict[str, list[str]]]:
+    validated: dict[str, dict[str, list[str]]] = {}
+    for region in ("domestic", "global"):
+        region_groups = raw.get(region, {}) if isinstance(raw, dict) else {}
+        validated[region] = {}
+        for source_type in ("news", "event", "social"):
+            queries = region_groups.get(source_type, []) if isinstance(region_groups, dict) else []
+            if not isinstance(queries, list):
+                queries = []
+            validated[region][source_type] = [
+                str(query).strip() for query in queries if str(query).strip()
+            ]
+    return validated
+
+
+def _normalize_results(results: list[dict[str, Any]], source_type: str, region: str) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for item in results:
         url = item.get("url", "")
@@ -123,6 +200,7 @@ def _normalize_results(results: list[dict[str, Any]], source_type: str) -> list[
                 "url": url,
                 "source": _extract_domain(url),
                 "source_type": source_type,
+                "region": region,
                 "published_at": published_at,
             }
         )
@@ -141,42 +219,39 @@ def _deduplicate_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def _filter_article_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    filtered: list[dict[str, Any]] = []
+def _keep_minimum_viable_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
     for issue in issues:
-        url = str(issue.get("url", "")).lower()
-        title = str(issue.get("title", "")).lower()
-        content = str(issue.get("content", "")).strip()
-
-        if any(keyword in url for keyword in EXCLUDED_URL_KEYWORDS):
+        if not str(issue.get("url", "")).strip():
             continue
-        if len(content) <= MIN_CONTENT_LENGTH:
+        if not str(issue.get("title", "")).strip():
             continue
-        if any(keyword in title for keyword in EXCLUDED_TITLE_KEYWORDS):
-            continue
+        kept.append(
+            {
+                "title": str(issue.get("title", "")).strip(),
+                "content": str(issue.get("content", "")).strip(),
+                "url": str(issue.get("url", "")).strip(),
+                "source": str(issue.get("source", "")).strip(),
+                "source_type": str(issue.get("source_type", "")).strip(),
+                "region": str(issue.get("region", "")).strip(),
+                "published_at": str(issue.get("published_at", "")).strip(),
+            }
+        )
+    return kept
 
-        filtered.append(issue)
-    return filtered
 
-
-def _filter_fresh_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    fresh: list[dict[str, Any]] = []
-    cutoff = datetime.now(timezone.utc).date() - timedelta(days=7)
-
-    for issue in issues:
-        published_at = str(issue.get("published_at", "")).strip()
-        if not published_at:
-            continue
-
-        try:
-            published_date = datetime.strptime(published_at, "%Y-%m-%d").date()
-        except ValueError:
-            continue
-
-        if published_date >= cutoff:
-            fresh.append(issue)
-
-    return fresh
+def _balance_regions(
+    domestic_issues: list[dict[str, Any]],
+    global_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    balanced: list[dict[str, Any]] = []
+    max_len = max(len(domestic_issues), len(global_issues))
+    for index in range(max_len):
+        if index < len(domestic_issues):
+            balanced.append(domestic_issues[index])
+        if index < len(global_issues):
+            balanced.append(global_issues[index])
+    return balanced
 
 
 def _extract_published_date(raw_date: str, content: str) -> str:

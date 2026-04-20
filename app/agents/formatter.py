@@ -5,16 +5,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MIN_IMPORTANCE_SCORE = 70
-MAX_OUTPUT_ITEMS = 5
 NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
 
 
 def format_issues(issues: list[dict[str, Any]]) -> str:
-    filtered = [
-        issue for issue in issues if isinstance(issue.get("score"), int) and issue.get("score", 0) >= MIN_IMPORTANCE_SCORE
-    ]
-    selected = sorted(filtered, key=lambda item: item.get("score", 0), reverse=True)[:MAX_OUTPUT_ITEMS]
+    filtered = [issue for issue in issues if issue.get("status") == "OK"]
+    selected = sorted(filtered, key=lambda item: item.get("score", 0), reverse=True)
 
     logger.info("Formatter: input=%s output=%s", len(issues), len(selected))
 

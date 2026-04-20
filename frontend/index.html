@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Issue Monitoring Admin</title>
+    <link rel="stylesheet" href="./style.css?v=20260420-7" />
+  </head>
+  <body>
+    <div class="dashboard">
+      <aside class="sidebar card">
+        <div>
+          <p class="eyebrow">Admin Dashboard</p>
+          <h1>AI Issue Monitor</h1>
+          <p class="muted">
+            에이전트 파이프라인 실행 상태와 이슈 결과를 한 화면에서 관리합니다.
+          </p>
+        </div>
+
+        <button id="runButton" type="button" class="run-button">Run Pipeline</button>
+
+        <div class="scheduler-box">
+          <p class="eyebrow">Scheduler</p>
+          <div class="scheduler-grid">
+            <div class="scheduler-item">
+              <span class="scheduler-label">상태</span>
+              <strong id="schedulerStarted">-</strong>
+            </div>
+            <div class="scheduler-item">
+              <span class="scheduler-label">실행 여부</span>
+              <strong id="schedulerRunning">-</strong>
+            </div>
+            <div class="scheduler-item full">
+              <span class="scheduler-label">다음 실행</span>
+              <strong id="schedulerNextRun">-</strong>
+            </div>
+            <div class="scheduler-item full">
+              <span class="scheduler-label">마지막 실행</span>
+              <strong id="schedulerLastRun">-</strong>
+            </div>
+          </div>
+        </div>
+
+        <div id="serverStatus" class="status-chip">서버 상태 확인 중</div>
+      </aside>
+
+      <main class="content">
+        <section class="top-grid">
+          <div class="card log-panel">
+            <div class="section-head">
+              <h2>실행 로그</h2>
+              <span id="lastUpdated" class="muted">데이터 없음</span>
+            </div>
+            <div class="log-items">
+              <div class="metric">
+                <span class="metric-label">최종 단계</span>
+                <strong id="finalStep">-</strong>
+              </div>
+              <div class="metric">
+                <span class="metric-label">실행 흐름</span>
+                <strong id="actions">-</strong>
+              </div>
+              <div class="metric-row">
+                <div class="metric compact">
+                  <span class="metric-label">최종 건수</span>
+                  <strong id="totalCount">0</strong>
+                </div>
+                <div class="metric compact">
+                  <span class="metric-label">처리 건수</span>
+                  <strong id="processedCount">0</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card metrics-card">
+            <div class="section-head">
+              <h2>성능 지표</h2>
+            </div>
+            <div class="metrics-grid top-metrics-grid">
+              <div class="metric-box">
+                <span class="metric-box-title">수집 균형</span>
+                <p id="metricCollection" class="metric-box-text">수집 0건 / 국내 0건 / 해외 0건</p>
+              </div>
+              <div class="metric-box">
+                <span class="metric-box-title">주요 이슈 분석</span>
+                <p id="metricAnalysis" class="metric-box-text">주요 이슈 0% / 사건 0 / 추세 0 / 신호 0</p>
+              </div>
+              <div class="metric-box">
+                <span class="metric-box-title">원문 감사</span>
+                <p id="metricAudit" class="metric-box-text">통과 0% / 날짜 없음 0% / 오래됨 0% / 본문 부족 0% / 일반 페이지 0% / 내용 불일치 0% / 링크 검증 실패 0%</p>
+              </div>
+              <div class="metric-box">
+                <span class="metric-box-title">중복 제거 / 판정</span>
+                <p id="metricDelivery" class="metric-box-text">중복 제거 0% / 최종 OK 0건</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card dedup-panel">
+            <div class="section-head">
+              <h2>의미 중복 제거</h2>
+            </div>
+            <p class="muted dedup-help">
+              before: analyzer 결과, after: dedup 이후 유지 건수, duplicates: DB 중복 제거 건수
+            </p>
+            <div class="log-items">
+              <div class="metric-row">
+                <div class="metric compact">
+                  <span class="metric-label">전</span>
+                  <strong id="dedupBefore">0</strong>
+                </div>
+                <div class="metric compact">
+                  <span class="metric-label">후</span>
+                  <strong id="dedupAfter">0</strong>
+                </div>
+                <div class="metric compact">
+                  <span class="metric-label">제거</span>
+                  <strong id="dedupDuplicates">0</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card guide-card">
+          <div class="section-head">
+            <h2>판정 기준 안내</h2>
+          </div>
+          <div class="guide-grid">
+            <div class="guide-item">
+              <strong>이슈 유형</strong>
+              <p><b>사건</b>: 실제 발표·투자·규제·인수합병 같은 사건</p>
+              <p><b>추세</b>: 시장·기술·산업의 지속적 변화</p>
+              <p><b>신호</b>: 발언·분석·논의·시장 시사점</p>
+            </div>
+            <div class="guide-item">
+              <strong>영향 범위</strong>
+              <p><b>글로벌</b>: 글로벌 시장·정책·공급망 수준</p>
+              <p><b>지역/국가</b>: 특정 국가·지역·산업 수준</p>
+              <p><b>제한적</b>: 영향 범위가 좁은 경우</p>
+            </div>
+            <div class="guide-item">
+              <strong>변화 성격 / 주요 이슈</strong>
+              <p><b>실제 변화</b>: 사건·발표·정책 등 명확한 변화</p>
+              <p><b>진행 중인 변화</b>: 구조적·지속적 흐름</p>
+              <p><b>해설/논평</b>: 분석·설명 중심 콘텐츠</p>
+              <p><b>주요 이슈</b>: 의사결정과 모니터링이 필요한 이슈</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="card table-card">
+          <div class="table-header">
+            <div>
+              <h2>Issue List</h2>
+              <p id="issueMeta" class="muted">분석 결과와 검증 상태를 확인합니다.</p>
+            </div>
+            <div class="filter-group">
+              <button class="filter-button active" data-filter="ALL">ALL <span id="countAll">0</span></button>
+              <button class="filter-button" data-filter="OK">OK <span id="countOk">0</span></button>
+              <button class="filter-button" data-filter="NO_OK">NO_OK <span id="countNoOk">0</span></button>
+            </div>
+          </div>
+
+          <div id="errorBanner" class="error-banner hidden">서버 연결 실패</div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>제목</th>
+                  <th>요약</th>
+                  <th>점수</th>
+                  <th>이슈 유형</th>
+                  <th>영향 범위</th>
+                  <th>변화 성격</th>
+                  <th>주요 이슈</th>
+                  <th>상태</th>
+                  <th>판정 이유</th>
+                  <th>링크</th>
+                </tr>
+              </thead>
+              <tbody id="issuesTableBody">
+                <tr>
+                  <td colspan="10" class="empty-state">데이터가 없습니다.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card table-card">
+          <div class="table-header">
+            <div>
+              <h2>Stored Issues</h2>
+              <p id="storedIssueMeta" class="muted">DB에 누적 저장된 이슈 이력입니다.</p>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>저장 시각</th>
+                  <th>제목</th>
+                  <th>점수</th>
+                  <th>이슈 유형</th>
+                  <th>상태</th>
+                  <th>판정 이유</th>
+                  <th>링크</th>
+                </tr>
+              </thead>
+              <tbody id="storedIssuesTableBody">
+                <tr>
+                  <td colspan="7" class="empty-state">저장된 이슈가 없습니다.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js?v=20260420-7"></script>
+  </body>
+</html>

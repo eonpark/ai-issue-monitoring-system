@@ -7,7 +7,7 @@ from typing import Any
 def analyze_issue(issue: dict[str, Any]) -> dict[str, Any]:
     """Stub analysis implementation that can later call an LLM."""
 
-    model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
     has_api_key = bool(os.getenv("OPENAI_API_KEY"))
     sentiment = "neutral"
     priority = "medium"
