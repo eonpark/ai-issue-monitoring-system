@@ -1,6 +1,6 @@
 # AI Issue Monitoring System
 
-공개 검색 API와 LLM을 활용해 국내외 주요 이슈를 수집, 분석, 검증하고 Slack 및 웹 Admin 페이지로 보고하는 로컬 실행용 AI 기반 프로토타입
+공개 검색 API와 LLM을 활용해 국내외 주요 이슈를 수집, 분석, 검증하고 discord 및 웹 Admin 페이지로 보고하는 로컬 실행용 AI 에이전트
 
 ---
 
